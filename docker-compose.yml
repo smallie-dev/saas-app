@@ -1,0 +1,21 @@
+services:
+  jsm_saas_app:
+    build:
+      context: ./components/application
+      target: local
+      args:
+        USERID: ${USERID:-1000}
+        GROUPID: ${GROUPID:-1000}
+    volumes:
+      - ./components/application:/app
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.jsm_saas_app.loadbalancer.server.port=3000
+      - traefik.http.routers.jsm_saas_app.rule=Host(`jsm-saas-app.local`)
+      - traefik.http.routers.jsm_saas_app.tls=true
+      - traefik.docker.network=jsm-saas-app-network
+
+networks:
+  default:
+      name: jsm-saas-app-network
+      driver: bridge

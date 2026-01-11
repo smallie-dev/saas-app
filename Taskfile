@@ -1,0 +1,255 @@
+#!/bin/bash
+# =========================================================
+# Taskfile gives you a set of quick tasks for your project
+# More info: https://github.com/Enrise/Taskfile
+# =========================================================
+
+function banner {
+	echo -e "${BLUE}\n"\
+	"████████╗ █████╗ ███████╗██╗  ██╗███████╗██╗██╗     ███████╗\n"\
+	"╚══██╔══╝██╔══██╗██╔════╝██║ ██╔╝██╔════╝██║██║     ██╔════╝\n"\
+	"   ██║   ███████║███████╗█████╔╝ █████╗  ██║██║     █████╗  \n"\
+	"   ██║   ██╔══██║╚════██║██╔═██╗ ██╔══╝  ██║██║     ██╔══╝  \n"\
+	"   ██║   ██║  ██║███████║██║  ██╗██║     ██║███████╗███████╗\n"\
+	"   ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚══════╝${RESET}"
+}
+
+# =========================================================
+## Project
+# =========================================================
+
+function task:init { ## Initialise the project for local development
+	project:check-required-files
+	project:check-local-domains
+	task:mkcert:certificates
+	task:build
+	project:update
+	task:start
+	task:help
+	project:list-hosts
+}
+
+function task:start { ## Start the project in development mode
+	task:proxy:start - Start manually because Windows
+	docker:start
+	task:proxy:connect
+	project:list-hosts
+}
+
+function project:list-hosts {
+	title "Running local project"
+	echo -e "Application:        ${BLUE}https://jsm-saas-app.local${RESET}"
+}
+
+function task:update { ## Update all dependencies and files
+	project:update
+}
+
+function project:update {
+	title "Run project updates"
+	application:update
+}
+
+function task:stop { ## Stop the local project
+	task:proxy:disconnect
+	docker:stop
+}
+
+function task:restart { ## Restart the local project
+	task:proxy:disconnect
+	docker:stop
+	task:proxy:start
+	docker:start
+	task:proxy:connect
+	project:list-hosts
+}
+
+function project:check-required-files {
+  title "Checking required files"
+  file:ensure-copy components/application/.env.local components/application/.env.example
+}
+
+function project:check-local-domains {
+	title "Checking hosts file"
+	for localHostName in "jsm-saas-app.local";
+	do
+		if ! grep --silent "$localHostName" /etc/hosts; then
+			echo -e "Host ${YELLOW}$localHostName${RESET} not found in ${YELLOW}/etc/hosts${RESET}."
+			read -p "Do you want to add entries from dev/hostnames.txt to /etc/hosts? [y/N] " confirm
+			if [[ "$confirm" =~ ^[Yy]$ ]]; then
+				echo "Adding entries to /etc/hosts (you may be prompted for your password)..."
+				sudo bash -c 'cat dev/hostnames.txt >> /etc/hosts' \
+					&& echo "Hosts successfully added ✅" \
+					|| echo "❌ Failed to update /etc/hosts"
+			else
+				echo "Skipped adding hosts."
+			fi
+		else
+			echo -e "Host ${GREEN}$localHostName${RESET} already exists in ${YELLOW}/etc/hosts${RESET}."
+		fi
+	done
+}
+
+# =========================================================
+## Shell
+# =========================================================
+
+function application:update {
+	title "Updating application"
+	application-run npm install
+}
+
+# =========================================================
+## Docker
+# =========================================================
+
+function task:build { ## Build all docker compose containers
+	title "Building docker compose project"
+	dockercompose build
+}
+
+function docker:start {
+	title "Starting docker compose project"
+	dockercompose up --detach --remove-orphans
+}
+
+function docker:stop {
+	title "Stopping docker compose project"
+	dockercompose down
+}
+
+function task:logs { ## Show the docker compose logs
+	title "Following local logs"
+	dockercompose logs --tail="20" --follow
+}
+
+function task:dc { ## Run docker compose command <command>
+	title "Docker compose $@"
+	dockercompose "$@"
+}
+
+function docker:assert-running {
+	if [ -z "$(dockercompose ps -q)" ]; then
+		echo -e "${RED}Oh noes, docker was not running yet, starting...${RESET}"
+		task:start
+		title "Resuming task"
+	fi
+}
+
+function dockercompose {
+	USERID=$USERID GROUPID=$GROUPID docker compose --file ./docker-compose.yml --project-name jsm-saas-app "$@"
+}
+
+function application-run {
+	dockercompose run --rm -u $USERID:$GROUPID jsm_saas_app "$@"
+}
+
+# =========================================================
+## Development proxy
+# =========================================================
+
+function task:mkcert:certificates { ## Run mkcert install for local https
+	title "Running mkcert install"
+	if ! command -v mkcert &> /dev/null
+    then
+		echo "mkcert could not be found and must be installed"
+		exit 1
+	fi
+	echo "Installing mkcert..."
+	mkcert -install
+	echo "Creating certificates..."
+	mkdir -p ~/.development-proxy/certs
+	mkdir -p ~/.development-proxy/config
+	(
+		cd ~/.development-proxy/certs && \
+		mkcert jsm-saas-app.local
+	)
+	echo "Copying dev proxy config..."
+	cp ./dev/traefik-config.yml ~/.development-proxy/config/traefik-jsm-saas-app-config.yml
+	echo "Done."
+}
+
+function task:proxy:start { ## Start the development proxy
+	title "Starting development proxy"
+	/bin/bash "$(pwd)/dev/scripts/development-proxy.sh"
+}
+
+function task:proxy:connect { ## Connect the development proxy to the project network
+	title "Connecting development proxy network"
+    docker network connect $NETWORK development-proxy || true
+    echo "Connected docker network."
+}
+
+function task:proxy:disconnect { ## Disconnect the development proxy from the project network
+	title "Disconnecting development proxy network"
+    docker network disconnect $NETWORK development-proxy || true
+    echo "Disconnected docker network."
+}
+
+# =========================================================
+# Utilities
+# =========================================================
+
+function file:ensure { # Abort if the desired file is not found
+	if [ ! -f $1 ]; then
+		echo -e "Missing required file ${RED}$1${RESET}, make sure it is created."
+		exit 1
+	else
+		echo "File ${GREEN}$1${RESET} is present.";
+	fi
+}
+
+function file:ensure-copy { # file:ensure-copy $COPY_DESTINATION $SOURCE
+	if [ ! -f $1 ]; then
+		cp $2 $1;
+		echo -e "Created copy of ${YELLOW}$2${RESET} to create required file ${GREEN}$1${RESET}.";
+	else
+		echo "File ${GREEN}$1${RESET} is present.";
+	fi
+}
+
+# =========================================================
+## Taskfile
+# =========================================================
+
+set -eo pipefail
+
+BLUE=$(printf '\033[36m')
+YELLOW=$(printf '\033[33m')
+RED=$(printf '\033[31m')
+GREEN=$(printf '\033[32m')
+RESET=$(printf '\033[0m')
+
+USERID=$(id -u)
+GROUPID=$(id -g)
+NETWORK="jsm-saas-app-network"
+
+function title {
+	echo -e "\n${BLUE}=>${RESET} $1\n"
+}
+
+function task:help { ## Show all available tasks
+	title "Available tasks"
+	awk 'BEGIN {FS = " { [#][#][ ]?"} /^([a-zA-Z_-]*:?.*)(\{ )?[#][#][ ]?/ \
+		{printf "\033[33m%-34s\033[0m %s\n", $1, $2}' $0 |\
+		sed -E "s/[#]{2,}[ ]*/${RESET}/g" |\
+		sed -E "s/function task:*/  /g"
+	echo -e "\n${BLUE}Usage:${RESET} ./Taskfile ${YELLOW}<task>${RESET} <args>"
+}
+
+function task:shorthand { ## Create CLI shorthand task instead of ./Taskfile
+	title "Creating task shorthand"
+	echo -e "You're about to create ${YELLOW}/usr/local/bin/task${RESET} that requires ${RED}root${RESET} permission..."
+	sudo curl --location --silent --output /usr/local/bin/task https://enri.se/taskfile-bin
+	sudo chmod +x /usr/local/bin/task
+	echo -e "${BLUE}You can now use:${RESET} task ${YELLOW}<task>${RESET} <args>"
+}
+
+banner
+if [[ ! "$(declare -F task:${@-help})" ]]; then
+	title "Task not found"
+	echo -e "Task ${RED}$1${RESET} doesn't exist."
+	task:help
+	exit 1
+fi
+task:${@-help}

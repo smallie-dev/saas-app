@@ -1,0 +1,6 @@
+tls:
+  certificates:
+    - certFile: /var/certs/jsm-saas-app.local.pem
+      keyFile: /var/certs/jsm-saas-app.local-key.pem
+    - certFile: /var/certs/_wildcard.jsm-saas-app.local.pem
+      keyFile: /var/certs/_wildcard.jsm-saas-app.local-key.pem
